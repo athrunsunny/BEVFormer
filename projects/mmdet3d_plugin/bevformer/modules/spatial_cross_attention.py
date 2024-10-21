@@ -74,16 +74,16 @@ class SpatialCrossAttention(BaseModule):
     
     @force_fp32(apply_to=('query', 'key', 'value', 'query_pos', 'reference_points_cam'))
     def forward(self,
-                query,
-                key,
-                value,
+                query,  # 经过TemporalSelfAttention之后的bev_query torch.Size([1, 2500, 256])
+                key,  # torch.Size([6, 375, 1, 256]) 六个相机的图像特征torch.Size([1, 6, 256, 15, 25])增加了相机embed和特征层embed
+                value,  # torch.Size([6, 375, 1, 256]) 六个相机的图像特征torch.Size([1, 6, 256, 15, 25])增加了相机embed和特征层embed
                 residual=None,
                 query_pos=None,
                 key_padding_mask=None,
                 reference_points=None,
                 spatial_shapes=None,
-                reference_points_cam=None,
-                bev_mask=None,
+                reference_points_cam=None, # 相机坐标系下的参考点torch.Size([6, 1, 2500, 4, 2])
+                bev_mask=None,  # 相机坐标系下生成的bev_mask，主要用于判断点是否位于相机前方以及相机成像平面内 torch.Size([6, 1, 2500, 4])
                 level_start_index=None,
                 flag='encoder',
                 **kwargs):
@@ -131,20 +131,20 @@ class SpatialCrossAttention(BaseModule):
         if query_pos is not None:
             query = query + query_pos
 
-        bs, num_query, _ = query.size()
+        bs, num_query, _ = query.size() # torch.Size([1, 2500, 256])
 
-        D = reference_points_cam.size(3)
+        D = reference_points_cam.size(3) # torch.Size([6, 1, 2500, 4, 2])
         indexes = []
         for i, mask_per_img in enumerate(bev_mask):
-            index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1)
+            index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1) # 在每个相机的bev_mask上求和之后找到不为0的索引
             indexes.append(index_query_per_img)
         max_len = max([len(each) for each in indexes])
 
         # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
         queries_rebatch = query.new_zeros(
-            [bs, self.num_cams, max_len, self.embed_dims])
+            [bs, self.num_cams, max_len, self.embed_dims]) # 根据bev_mask上求和之后找到不为0的索引个数最大值生成（全0） torch.Size([1, 6, 604, 256])
         reference_points_rebatch = reference_points_cam.new_zeros(
-            [bs, self.num_cams, max_len, D, 2])
+            [bs, self.num_cams, max_len, D, 2]) # 根据bev_mask上求和之后找到不为0的索引个数最大值生成（全0） torch.Size([1, 6, 604, 4, 2])
         
         for j in range(bs):
             for i, reference_points_per_img in enumerate(reference_points_cam):   
@@ -152,25 +152,25 @@ class SpatialCrossAttention(BaseModule):
                 queries_rebatch[j, i, :len(index_query_per_img)] = query[j, index_query_per_img]
                 reference_points_rebatch[j, i, :len(index_query_per_img)] = reference_points_per_img[j, index_query_per_img]
 
-        num_cams, l, bs, embed_dims = key.shape
+        num_cams, l, bs, embed_dims = key.shape # torch.Size([6, 375, 1, 256])
 
         key = key.permute(2, 0, 1, 3).reshape(
-            bs * self.num_cams, l, self.embed_dims)
+            bs * self.num_cams, l, self.embed_dims) #torch.Size([6, 375, 1, 256])-> torch.Size([6, 375, 256])
         value = value.permute(2, 0, 1, 3).reshape(
-            bs * self.num_cams, l, self.embed_dims)
+            bs * self.num_cams, l, self.embed_dims)#torch.Size([6, 375, 1, 256])-> torch.Size([6, 375, 256])
 
         queries = self.deformable_attention(query=queries_rebatch.view(bs*self.num_cams, max_len, self.embed_dims), key=key, value=value,
                                             reference_points=reference_points_rebatch.view(bs*self.num_cams, max_len, D, 2), spatial_shapes=spatial_shapes,
                                             level_start_index=level_start_index).view(bs, self.num_cams, max_len, self.embed_dims)
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
-                slots[j, index_query_per_img] += queries[j, i, :len(index_query_per_img)]
+                slots[j, index_query_per_img] += queries[j, i, :len(index_query_per_img)] # 将多视角图像特征投影到同一空间上
 
         count = bev_mask.sum(-1) > 0
         count = count.permute(1, 2, 0).sum(-1)
         count = torch.clamp(count, min=1.0)
         slots = slots / count[..., None]
-        slots = self.output_proj(slots)
+        slots = self.output_proj(slots) # output_projLinear:(in_features=256, out_features=256, bias=True) torch.Size([1, 2500, 256])
 
         return self.dropout(slots) + inp_residual
 
@@ -331,21 +331,21 @@ class MSDeformableAttention3D(BaseModule):
         bs, num_value, _ = value.shape
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
 
-        value = self.value_proj(value)
+        value = self.value_proj(value) # value_proj:Linear(in_features=256, out_features=256, bias=True) torch.Size([6, 375, 256])->torch.Size([6, 375, 256])
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
-        value = value.view(bs, num_value, self.num_heads, -1)
+        value = value.view(bs, num_value, self.num_heads, -1) #torch.Size([6, 375, 256])->torch.Size([6, 375, 8, 32])
         sampling_offsets = self.sampling_offsets(query).view(
-            bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
+            bs, num_query, self.num_heads, self.num_levels, self.num_points, 2) # sampling_offsets:Linear(in_features=256, out_features=128, bias=True) torch.Size([6, 604, 256])->torch.Size([6, 604, 8, 1, 8, 2])
         attention_weights = self.attention_weights(query).view(
-            bs, num_query, self.num_heads, self.num_levels * self.num_points)
+            bs, num_query, self.num_heads, self.num_levels * self.num_points) # attention_weights:Linear(in_features=256, out_features=64, bias=True) torch.Size([6, 604, 256])->torch.Size([6, 604, 8, 8])
 
         attention_weights = attention_weights.softmax(-1)
 
         attention_weights = attention_weights.view(bs, num_query,
                                                    self.num_heads,
                                                    self.num_levels,
-                                                   self.num_points)
+                                                   self.num_points) # torch.Size([6, 604, 8, 8])->torch.Size([6, 604, 8, 1, 8])
 
         if reference_points.shape[-1] == 2:
             """
@@ -355,21 +355,21 @@ class MSDeformableAttention3D(BaseModule):
             For `num_Z_anchors` reference points,  it has overall `num_points * num_Z_anchors` sampling points.
             """
             offset_normalizer = torch.stack(
-                [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
+                [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1) # torch.Size([1, 2]) tensor([[25, 15]], device='cuda:0')
 
-            bs, num_query, num_Z_anchors, xy = reference_points.shape
-            reference_points = reference_points[:, :, None, None, None, :, :]
+            bs, num_query, num_Z_anchors, xy = reference_points.shape # torch.Size([6, 604, 4, 2])
+            reference_points = reference_points[:, :, None, None, None, :, :] # torch.Size([6, 604, 1, 1, 1, 4, 2])
             sampling_offsets = sampling_offsets / \
-                offset_normalizer[None, None, None, :, None, :]
-            bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_offsets.shape
+                offset_normalizer[None, None, None, :, None, :] # torch.Size([6, 604, 8, 1, 8, 2])
+            bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_offsets.shape # torch.Size([6, 604, 8, 1, 8, 2])
             sampling_offsets = sampling_offsets.view(
-                bs, num_query, num_heads, num_levels, num_all_points // num_Z_anchors, num_Z_anchors, xy)
-            sampling_locations = reference_points + sampling_offsets
+                bs, num_query, num_heads, num_levels, num_all_points // num_Z_anchors, num_Z_anchors, xy) # torch.Size([6, 604, 8, 1, 2, 4, 2])
+            sampling_locations = reference_points + sampling_offsets # torch.Size([6, 604, 8, 1, 2, 4, 2])
             bs, num_query, num_heads, num_levels, num_points, num_Z_anchors, xy = sampling_locations.shape
             assert num_all_points == num_points * num_Z_anchors
 
             sampling_locations = sampling_locations.view(
-                bs, num_query, num_heads, num_levels, num_all_points, xy)
+                bs, num_query, num_heads, num_levels, num_all_points, xy) # torch.Size([6, 604, 8, 1, 2, 4, 2])->torch.Size([6, 604, 8, 1, 8, 2])
 
         elif reference_points.shape[-1] == 4:
             assert False
@@ -396,4 +396,4 @@ class MSDeformableAttention3D(BaseModule):
         if not self.batch_first:
             output = output.permute(1, 0, 2)
 
-        return output
+        return output # torch.Size([6, 604, 256])

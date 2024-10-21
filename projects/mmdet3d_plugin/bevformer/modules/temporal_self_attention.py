@@ -130,7 +130,7 @@ class TemporalSelfAttention(BaseModule):
                 key=None,
                 value=None,
                 identity=None,
-                query_pos=None,
+                query_pos=None, # (全零初始化)经过LearnedPositionalEncoding
                 key_padding_mask=None,
                 reference_points=None,
                 spatial_shapes=None,
@@ -176,14 +176,14 @@ class TemporalSelfAttention(BaseModule):
 
         if value is None:
             assert self.batch_first
-            bs, len_bev, c = query.shape
-            value = torch.stack([query, query], 1).reshape(bs*2, len_bev, c)
-
+            bs, len_bev, c = query.shape # torch.Size([1, 2500, 256])
+            value = torch.stack([query, query], 1).reshape(bs*2, len_bev, c) # torch.Size([1, 2500, 256])->torch.Size([2, 2500, 256])
+            # 前一帧bev不存在的时候会进来，用当前的query（即nn.Embedding(2500, 256)初始化的bev_queries）进行堆叠
             # value = torch.cat([query, query], 0)
 
         if identity is None:
             identity = query
-        if query_pos is not None:
+        if query_pos is not None: # query_pos（即bev_pos）(全零初始化)经过LearnedPositionalEncoding
             query = query + query_pos
         if not self.batch_first:
             # change to (bs, num_query ,embed_dims)
@@ -194,39 +194,39 @@ class TemporalSelfAttention(BaseModule):
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
         assert self.num_bev_queue == 2
 
-        query = torch.cat([value[:bs], query], -1)
-        value = self.value_proj(value)
+        query = torch.cat([value[:bs], query], -1) # 这部分要等有前一帧bev时再分析 torch.Size([1, 2500, 512])
+        value = self.value_proj(value) # value_proj:Linear(in_features=256, out_features=256, bias=True) torch.Size([2, 2500, 256])
 
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
 
         value = value.reshape(bs*self.num_bev_queue,
-                              num_value, self.num_heads, -1)
+                              num_value, self.num_heads, -1) # torch.Size([2, 2500, 256])->torch.Size([2, 2500, 8, 32])
 
-        sampling_offsets = self.sampling_offsets(query)
+        sampling_offsets = self.sampling_offsets(query) # sampling_offsets:Linear(in_features=512, out_features=128, bias=True) torch.Size([1, 2500, 128])
         sampling_offsets = sampling_offsets.view(
-            bs, num_query, self.num_heads,  self.num_bev_queue, self.num_levels, self.num_points, 2)
+            bs, num_query, self.num_heads,  self.num_bev_queue, self.num_levels, self.num_points, 2) # torch.Size([1, 2500, 8, 2, 1, 4, 2])
         attention_weights = self.attention_weights(query).view(
-            bs, num_query,  self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
+            bs, num_query,  self.num_heads, self.num_bev_queue, self.num_levels * self.num_points) # attention_weights:Linear(in_features=512, out_features=64, bias=True) torch.Size([1, 2500, 8, 2, 4])
         attention_weights = attention_weights.softmax(-1)
 
         attention_weights = attention_weights.view(bs, num_query,
                                                    self.num_heads,
                                                    self.num_bev_queue,
                                                    self.num_levels,
-                                                   self.num_points)
+                                                   self.num_points) # torch.Size([1, 2500, 8, 2, 4])->torch.Size([1, 2500, 8, 2, 1, 4])
 
         attention_weights = attention_weights.permute(0, 3, 1, 2, 4, 5)\
-            .reshape(bs*self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points).contiguous()
+            .reshape(bs*self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points).contiguous() # torch.Size([1, 2500, 8, 2, 1, 4])->torch.Size([2, 2500, 8, 1, 4])
         sampling_offsets = sampling_offsets.permute(0, 3, 1, 2, 4, 5, 6)\
-            .reshape(bs*self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points, 2)
+            .reshape(bs*self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points, 2) # torch.Size([1, 2500, 8, 2, 1, 4, 2])->torch.Size([2, 2500, 8, 1, 4, 2])
 
         if reference_points.shape[-1] == 2:
             offset_normalizer = torch.stack(
                 [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
             sampling_locations = reference_points[:, :, None, :, None, :] \
                 + sampling_offsets \
-                / offset_normalizer[None, None, None, :, None, :]
+                / offset_normalizer[None, None, None, :, None, :] # torch.Size([2, 2500, 8, 1, 4, 2])
 
         elif reference_points.shape[-1] == 4:
             sampling_locations = reference_points[:, :, None, :, None, :2] \
@@ -250,21 +250,21 @@ class TemporalSelfAttention(BaseModule):
         else:
 
             output = multi_scale_deformable_attn_pytorch(
-                value, spatial_shapes, sampling_locations, attention_weights)
+                value, spatial_shapes, sampling_locations, attention_weights) # torch.Size([2, 2500, 256])
 
         # output shape (bs*num_bev_queue, num_query, embed_dims)
         # (bs*num_bev_queue, num_query, embed_dims)-> (num_query, embed_dims, bs*num_bev_queue)
-        output = output.permute(1, 2, 0)
+        output = output.permute(1, 2, 0) # torch.Size([2, 2500, 256])->torch.Size([2500, 256, 2])
 
         # fuse history value and current value
         # (num_query, embed_dims, bs*num_bev_queue)-> (num_query, embed_dims, bs, num_bev_queue)
-        output = output.view(num_query, embed_dims, bs, self.num_bev_queue)
-        output = output.mean(-1)
+        output = output.view(num_query, embed_dims, bs, self.num_bev_queue) # torch.Size([2500, 256, 2])->torch.Size([2500, 256, 1, 2])
+        output = output.mean(-1) # torch.Size([2500, 256, 1])
 
         # (num_query, embed_dims, bs)-> (bs, num_query, embed_dims)
-        output = output.permute(2, 0, 1)
+        output = output.permute(2, 0, 1) # torch.Size([2500, 256, 1])->torch.Size([1, 2500, 256])
 
-        output = self.output_proj(output)
+        output = self.output_proj(output) # output_proj:Linear(in_features=256, out_features=256, bias=True) torch.Size([1, 2500, 256])
 
         if not self.batch_first:
             output = output.permute(1, 0, 2)

@@ -80,15 +80,15 @@ class BEVFormer(MVXTwoStageDetector):
                 B, N, C, H, W = img.size()
                 img = img.reshape(B * N, C, H, W)
             if self.use_grid_mask:
-                img = self.grid_mask(img)
+                img = self.grid_mask(img) # 图像使用块遮挡进行增强
 
-            img_feats = self.img_backbone(img)
+            img_feats = self.img_backbone(img) # img_feats:torch.Size([6, 2048, 15, 25])
             if isinstance(img_feats, dict):
                 img_feats = list(img_feats.values())
         else:
             return None
         if self.with_img_neck:
-            img_feats = self.img_neck(img_feats)
+            img_feats = self.img_neck(img_feats) # 先使用1*1卷积降维，再用3*3卷积
 
         img_feats_reshaped = []
         for img_feat in img_feats:
@@ -96,14 +96,14 @@ class BEVFormer(MVXTwoStageDetector):
             if len_queue is not None:
                 img_feats_reshaped.append(img_feat.view(int(B/len_queue), len_queue, int(BN / B), C, H, W))
             else:
-                img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
+                img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W)) # [torch.Size([1, 6, 256, 15, 25])]
         return img_feats_reshaped
 
     @auto_fp16(apply_to=('img'))
     def extract_feat(self, img, img_metas=None, len_queue=None):
         """Extract features from images and points."""
 
-        img_feats = self.extract_img_feat(img, img_metas, len_queue=len_queue)
+        img_feats = self.extract_img_feat(img, img_metas, len_queue=len_queue) # torch.Size([1, 6, 256, 15, 25])
         
         return img_feats
 

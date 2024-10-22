@@ -167,6 +167,7 @@ class SpatialCrossAttention(BaseModule):
                                             level_start_index=level_start_index).view(bs, self.num_cams, max_len, self.embed_dims)
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
+                # 不同相机间的特征向量直接相加
                 slots[j, index_query_per_img] += queries[j, i, :len(index_query_per_img)] # 将多视角图像特征投影到同一空间上
 
         count = bev_mask.sum(-1) > 0

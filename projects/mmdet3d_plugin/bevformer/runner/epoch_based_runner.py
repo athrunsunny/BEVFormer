@@ -78,10 +78,12 @@ class EpochBasedRunner_video(EpochBasedRunner):
                             assert False
                 data_list.append(data)
             with torch.no_grad():
+                # 由前num_samples-1帧循环经过(extract_img_feat->encoder)，生成之前时刻的bev特征，没有梯度回传
                 for i in range(num_samples-1):
                     if data_list[i]['img_metas'].data[0][0]['prev_bev_exists']:
                         data_list[i]['prev_bev'] = DataContainer(data=[prev_bev], cpu_only=False)
-                    prev_bev = self.eval_model.val_step(data_list[i], self.optimizer, **kwargs)
+                    # 起始时刻没有前一帧的bev特征，即用当前帧的bev特征做self_attn；当存在前一帧的bev特征时，则使用前一帧和当前帧的bev特征做self_attn
+                    prev_bev = self.eval_model.val_step(data_list[i], self.optimizer, **kwargs) 
             if data_list[-1]['img_metas'].data[0][0]['prev_bev_exists']:
                 data_list[-1]['prev_bev'] = DataContainer(data=[prev_bev], cpu_only=False)
             outputs = self.model.train_step(data_list[-1], self.optimizer, **kwargs)

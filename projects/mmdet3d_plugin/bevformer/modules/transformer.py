@@ -153,7 +153,7 @@ class PerceptionTransformer(BaseModule):
                                           center=self.rotate_center) # F_t.rotate(img, matrix=matrix, interpolation=interpolation.value, expand=expand, fill=fill)
                     tmp_prev_bev = tmp_prev_bev.permute(1, 2, 0).reshape(
                         bev_h * bev_w, 1, -1) # torch.Size([256, 50, 50])->torch.Size([2500, 1, 256])
-                    prev_bev[:, i] = tmp_prev_bev[:, 0] # 根据车辆转角，转动bev特征平面
+                    prev_bev[:, i] = tmp_prev_bev[:, 0] # 根据当前帧车辆转角，转动bev特征平面
 
         # add can bus signals
         can_bus = bev_queries.new_tensor(

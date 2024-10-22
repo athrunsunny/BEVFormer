@@ -364,8 +364,8 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
 
                 query = self.attentions[attn_index](
                     query, # torch.Size([1, 2500, 256])没有前一帧的情况下就是由nn.Embedding(2500, 256)初始化的bev_queries，增加了相机位姿信息/
-                    prev_bev, # 没有前一帧的情况下None/
-                    prev_bev, # 没有前一帧的情况下None/
+                    prev_bev, # 没有前一帧的情况下None/堆叠了前一帧和当前帧（）的bev特征，torch.stack([prev_bev, bev_query], 1):torch.Size([2, 2500, 256])
+                    prev_bev, # 没有前一帧的情况下None/堆叠了前一帧和当前帧（）的bev特征，torch.stack([prev_bev, bev_query], 1):torch.Size([2, 2500, 256])
                     identity if self.pre_norm else None,
                     query_pos=bev_pos, # torch.Size([1, 2500, 256])
                     key_pos=bev_pos, # torch.Size([1, 2500, 256])

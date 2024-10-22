@@ -138,7 +138,7 @@ class SpatialCrossAttention(BaseModule):
         for i, mask_per_img in enumerate(bev_mask):
             # 相机坐标系下生成的bev_mask，主要用于判断点是否位于相机前方以及图像感受野内 torch.Size([6, 1, 2500, 4])
             # bev_mask在空间上（z轴上）分了四层，即在z轴上包含四个点，nonzero表示至少有一个点可以投影在图像上
-            # 包含的4个点至少有一个可以投影到图像上的pillar在50*50的bev中的索引
+            # 包含的4个点至少有一个可以投影到图像的pillar（视锥）上，在50*50的bev中的索引
             index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1) # 在每个相机的bev_mask上求和之后找到不为0的索引
             indexes.append(index_query_per_img)
         max_len = max([len(each) for each in indexes])

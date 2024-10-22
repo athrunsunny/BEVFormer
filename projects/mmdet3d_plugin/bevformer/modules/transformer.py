@@ -192,7 +192,7 @@ class PerceptionTransformer(BaseModule):
             bev_pos=bev_pos, # torch.Size([2500, 1, 256]) bev_mask经过LearnedPositionalEncoding之后，torch.Size([1, 256, 50, 50])
             spatial_shapes=spatial_shapes, # 多层情况为每一层特征图的h和w
             level_start_index=level_start_index, # 多层情况为每一层的特征图展平后的索引
-            prev_bev=prev_bev, # 第一帧为None/ 之后会根据自车朝向，转动bev特征，torch.Size([2500, 1, 256])
+            prev_bev=prev_bev, # 第一帧为None/ 之后会根据当前帧自车朝向，转动bev特征，torch.Size([2500, 1, 256])
             shift=shift, # torch.Size([1, 2]) 与上一时刻相对偏移量
             **kwargs
         )

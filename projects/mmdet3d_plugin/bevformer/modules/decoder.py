@@ -64,12 +64,12 @@ class DetectionTransformerDecoder(TransformerLayerSequence):
         self.fp16_enabled = False
 
     def forward(self,
-                query,
+                query, # 由nn.Embedding(900, 512)生成并拆分为两组取其中一组 torch.Size([900, 1, 256])
                 *args,
-                reference_points=None,
-                reg_branches=None,
+                reference_points=None, # query_pos经过线性层得到 torch.Size([1, 900, 3])
+                reg_branches=None, # 6个线性层
                 key_padding_mask=None,
-                **kwargs):
+                **kwargs): # value=bev_embed, # 由encoder生成的bev特征 torch.Size([2500, 1, 256]) query_pos=query_pos, # 由nn.Embedding(900, 512)初始化生成并拆分为两组取其中另一组 torch.Size([900, 1, 256])
         """Forward function for `Detr3DTransformerDecoder`.
         Args:
             query (Tensor): Input query with shape
@@ -93,21 +93,21 @@ class DetectionTransformerDecoder(TransformerLayerSequence):
         for lid, layer in enumerate(self.layers):
 
             reference_points_input = reference_points[..., :2].unsqueeze(
-                2)  # BS NUM_QUERY NUM_LEVEL 2
+                2)  # BS NUM_QUERY NUM_LEVEL 2 torch.Size([1, 900, 1, 2])
             output = layer(
-                output,
+                output, # 最初由nn.Embedding(900, 512)初始化生成并拆分为两组取其中一组 torch.Size([900, 1, 256])
                 *args,
-                reference_points=reference_points_input,
+                reference_points=reference_points_input, # reference_points取了二维坐标点
                 key_padding_mask=key_padding_mask,
-                **kwargs)
+                **kwargs) # value=bev_embed, # 由encoder生成的bev特征 torch.Size([2500, 1, 256]) query_pos=query_pos, # 由nn.Embedding(900, 512)初始化生成并拆分为两组取其中另一组 torch.Size([900, 1, 256])
             output = output.permute(1, 0, 2)
 
             if reg_branches is not None:
-                tmp = reg_branches[lid](output)
+                tmp = reg_branches[lid](output) # torch.Size([1, 900, 256])->torch.Size([1, 900, 10])
 
                 assert reference_points.shape[-1] == 3
 
-                new_reference_points = torch.zeros_like(reference_points)
+                new_reference_points = torch.zeros_like(reference_points) # torch.Size([1, 900, 3]) (全0)
                 new_reference_points[..., :2] = tmp[
                     ..., :2] + inverse_sigmoid(reference_points[..., :2])
                 new_reference_points[..., 2:3] = tmp[
@@ -115,10 +115,10 @@ class DetectionTransformerDecoder(TransformerLayerSequence):
 
                 new_reference_points = new_reference_points.sigmoid()
 
-                reference_points = new_reference_points.detach()
+                reference_points = new_reference_points.detach() # torch.Size([1, 900, 3])
 
-            output = output.permute(1, 0, 2)
-            if self.return_intermediate:
+            output = output.permute(1, 0, 2) # torch.Size([1, 900, 256])->torch.Size([900, 1, 256])
+            if self.return_intermediate: # 保存中间层的输出结果
                 intermediate.append(output)
                 intermediate_reference_points.append(reference_points)
 
@@ -229,13 +229,13 @@ class CustomMSDeformableAttention(BaseModule):
     @deprecated_api_warning({'residual': 'identity'},
                             cls_name='MultiScaleDeformableAttention')
     def forward(self,
-                query,
+                query, # 最初由nn.Embedding(900, 512)初始化生成并拆分为两组取其中一组 torch.Size([900, 1, 256])
                 key=None,
-                value=None,
+                value=None, # 由encoder生成的bev特征 torch.Size([2500, 1, 256])
                 identity=None,
-                query_pos=None,
+                query_pos=None, # 由nn.Embedding(900, 512)初始化生成并拆分为两组取其中另一组 torch.Size([900, 1, 256])
                 key_padding_mask=None,
-                reference_points=None,
+                reference_points=None, # reference_points取了二维坐标点
                 spatial_shapes=None,
                 level_start_index=None,
                 flag='decoder',
@@ -285,34 +285,34 @@ class CustomMSDeformableAttention(BaseModule):
             query = query + query_pos
         if not self.batch_first:
             # change to (bs, num_query ,embed_dims)
-            query = query.permute(1, 0, 2)
-            value = value.permute(1, 0, 2)
+            query = query.permute(1, 0, 2) # torch.Size([900, 1, 256])->torch.Size([1, 900, 256])
+            value = value.permute(1, 0, 2) # torch.Size([2500, 1, 256])->torch.Size([1, 2500, 256])
 
         bs, num_query, _ = query.shape
         bs, num_value, _ = value.shape
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
 
-        value = self.value_proj(value)
+        value = self.value_proj(value) # self.value_proj:Linear(in_features=256, out_features=256, bias=True)
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
-        value = value.view(bs, num_value, self.num_heads, -1)
+        value = value.view(bs, num_value, self.num_heads, -1) # torch.Size([1, 2500, 256])->torch.Size([1, 2500, 8, 32])
 
         sampling_offsets = self.sampling_offsets(query).view(
-            bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
+            bs, num_query, self.num_heads, self.num_levels, self.num_points, 2) #self.sampling_offsets:Linear(in_features=256, out_features=64, bias=True) torch.Size([1, 900, 256])->torch.Size([1, 900, 8, 1, 4, 2])
         attention_weights = self.attention_weights(query).view(
-            bs, num_query, self.num_heads, self.num_levels * self.num_points)
+            bs, num_query, self.num_heads, self.num_levels * self.num_points) # self.attention_weights:Linear(in_features=256, out_features=32, bias=True) torch.Size([1, 900, 256])->torch.Size([1, 900, 8, 4])
         attention_weights = attention_weights.softmax(-1)
 
         attention_weights = attention_weights.view(bs, num_query,
                                                    self.num_heads,
                                                    self.num_levels,
-                                                   self.num_points)
+                                                   self.num_points) # torch.Size([1, 900, 8, 4])->torch.Size([1, 900, 8, 1, 4])
         if reference_points.shape[-1] == 2:
             offset_normalizer = torch.stack(
-                [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
+                [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1) # tensor([[50, 50]], device='cuda:0')
             sampling_locations = reference_points[:, :, None, :, None, :] \
                 + sampling_offsets \
-                / offset_normalizer[None, None, None, :, None, :]
+                / offset_normalizer[None, None, None, :, None, :] # torch.Size([1, 900, 8, 1, 4, 2])
         elif reference_points.shape[-1] == 4:
             sampling_locations = reference_points[:, :, None, :, None, :2] \
                 + sampling_offsets / self.num_points \
@@ -336,10 +336,10 @@ class CustomMSDeformableAttention(BaseModule):
             output = multi_scale_deformable_attn_pytorch(
                 value, spatial_shapes, sampling_locations, attention_weights)
 
-        output = self.output_proj(output)
+        output = self.output_proj(output) # self.output_proj:Linear(in_features=256, out_features=256, bias=True) torch.Size([1, 900, 256])
 
         if not self.batch_first:
             # (num_query, bs ,embed_dims)
-            output = output.permute(1, 0, 2)
+            output = output.permute(1, 0, 2) # torch.Size([1, 900, 256])->torch.Size([900, 1, 256])
 
         return self.dropout(output) + identity

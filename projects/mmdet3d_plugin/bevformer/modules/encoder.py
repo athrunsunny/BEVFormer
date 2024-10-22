@@ -165,8 +165,8 @@ class BEVFormerEncoder(TransformerLayerSequence):
                 spatial_shapes=None,
                 level_start_index=None,
                 valid_ratios=None,
-                prev_bev=None,
-                shift=0.,
+                prev_bev=None, # 第一帧为None/ 之后会根据自车朝向，转动bev特征，torch.Size([2500, 1, 256])
+                shift=0., # torch.Size([1, 2]) 与上一时刻相对偏移量
                 **kwargs):
         """Forward function for `TransformerDecoder`.
         Args:
@@ -191,34 +191,34 @@ class BEVFormerEncoder(TransformerLayerSequence):
         intermediate = []
 
         ref_3d = self.get_reference_points(
-            bev_h, bev_w, self.pc_range[5]-self.pc_range[2], self.num_points_in_pillar, dim='3d', bs=bev_query.size(1),  device=bev_query.device, dtype=bev_query.dtype)
+            bev_h, bev_w, self.pc_range[5]-self.pc_range[2], self.num_points_in_pillar, dim='3d', bs=bev_query.size(1),  device=bev_query.device, dtype=bev_query.dtype) # torch.Size([1, 4, 2500, 3])
         ref_2d = self.get_reference_points(
-            bev_h, bev_w, dim='2d', bs=bev_query.size(1), device=bev_query.device, dtype=bev_query.dtype)
+            bev_h, bev_w, dim='2d', bs=bev_query.size(1), device=bev_query.device, dtype=bev_query.dtype) # torch.Size([1, 2500, 1, 2])
 
         reference_points_cam, bev_mask = self.point_sampling(
             ref_3d, self.pc_range, kwargs['img_metas']) # pc_range:[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
         # # 相机坐标系下的参考点reference_points_cam:torch.Size([6, 1, 2500, 4, 2]) bev_mask:torch.Size([6, 1, 2500, 4])
         # bug: this code should be 'shift_ref_2d = ref_2d.clone()', we keep this bug for reproducing our results in paper.
         shift_ref_2d = ref_2d.clone()
-        shift_ref_2d += shift[:, None, None, :] # shift为tensor([[0., 0.]])
+        shift_ref_2d += shift[:, None, None, :] # shift:torch.Size([1, 2])
 
         # (num_query, bs, embed_dims) -> (bs, num_query, embed_dims)
         bev_query = bev_query.permute(1, 0, 2) # torch.Size([2500, 1, 256])->torch.Size([1, 2500, 256])
         bev_pos = bev_pos.permute(1, 0, 2) #torch.Size([2500, 1, 256])->torch.Size([1, 2500, 256]) # (全零初始化)经过LearnedPositionalEncoding
         bs, len_bev, num_bev_level, _ = ref_2d.shape
         if prev_bev is not None:
-            prev_bev = prev_bev.permute(1, 0, 2)
+            prev_bev = prev_bev.permute(1, 0, 2) # torch.Size([2500, 1, 256])->torch.Size([1, 2500, 256])
             prev_bev = torch.stack(
-                [prev_bev, bev_query], 1).reshape(bs*2, len_bev, -1)
+                [prev_bev, bev_query], 1).reshape(bs*2, len_bev, -1) # 上一帧的bev特征和当前帧的bev特征堆叠  torch.Size([2, 2500, 256])
             hybird_ref_2d = torch.stack([shift_ref_2d, ref_2d], 1).reshape(
-                bs*2, len_bev, num_bev_level, 2)
+                bs*2, len_bev, num_bev_level, 2) # 前一帧的偏移量加上2d参考点和当前帧的2d参考点
         else:
             hybird_ref_2d = torch.stack([ref_2d, ref_2d], 1).reshape(
                 bs*2, len_bev, num_bev_level, 2) # 没有前一帧bev的情况下，合并两个当前的2d参考点torch.Size([1, 2500, 1, 2])->torch.Size([2, 2500, 1, 2])
 
         for lid, layer in enumerate(self.layers):
             output = layer(
-                bev_query, # torch.Size([2500, 1, 256]) 没有前一帧的情况下就是由nn.Embedding(2500, 256)初始化的bev_queries，增加了相机位姿信息
+                bev_query, # torch.Size([1, 2500, 256]) 就是由nn.Embedding(2500, 256)初始化的bev_queries，增加了相机位姿信息
                 key, # torch.Size([6, 375, 1, 256]) 六个相机的图像特征torch.Size([1, 6, 256, 15, 25])增加了相机embed和特征层embed
                 value, # torch.Size([6, 375, 1, 256]) 六个相机的图像特征torch.Size([1, 6, 256, 15, 25])增加了相机embed和特征层embed
                 *args,
@@ -231,7 +231,7 @@ class BEVFormerEncoder(TransformerLayerSequence):
                 level_start_index=level_start_index,
                 reference_points_cam=reference_points_cam, # 相机坐标系下的参考点
                 bev_mask=bev_mask, # 相机坐标系下生成的bev_mask，主要用于判断点是否位于相机前方以及相机成像平面内
-                prev_bev=prev_bev,
+                prev_bev=prev_bev, # 第一帧为None/ 之后会根据自车朝向，转动bev特征，并堆叠当前帧的bev特征 torch.Size([2, 2500, 256])
                 **kwargs)
 
             bev_query = output
@@ -241,7 +241,7 @@ class BEVFormerEncoder(TransformerLayerSequence):
         if self.return_intermediate:
             return torch.stack(intermediate)
 
-        return output
+        return output # torch.Size([1, 2500, 256])
 
 
 @TRANSFORMER_LAYER.register_module()
@@ -364,8 +364,8 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
 
                 query = self.attentions[attn_index](
                     query, # torch.Size([1, 2500, 256])没有前一帧的情况下就是由nn.Embedding(2500, 256)初始化的bev_queries，增加了相机位姿信息/
-                    prev_bev, # 没有前一帧的情况下None/堆叠了前一帧和当前帧（）的bev特征，torch.stack([prev_bev, bev_query], 1):torch.Size([2, 2500, 256])
-                    prev_bev, # 没有前一帧的情况下None/堆叠了前一帧和当前帧（）的bev特征，torch.stack([prev_bev, bev_query], 1):torch.Size([2, 2500, 256])
+                    prev_bev, # 第一帧为None/ 之后会根据自车朝向，转动bev特征，并堆叠当前帧的bev特征 torch.stack([prev_bev, bev_query], 1):torch.Size([2, 2500, 256])
+                    prev_bev, # 第一帧为None/ 之后会根据自车朝向，转动bev特征，并堆叠当前帧的bev特征 torch.stack([prev_bev, bev_query], 1):torch.Size([2, 2500, 256])
                     identity if self.pre_norm else None,
                     query_pos=bev_pos, # torch.Size([1, 2500, 256])
                     key_pos=bev_pos, # torch.Size([1, 2500, 256])
@@ -375,7 +375,7 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
                     spatial_shapes=torch.tensor(
                         [[bev_h, bev_w]], device=query.device), #(50,50)
                     level_start_index=torch.tensor([0], device=query.device),
-                    **kwargs) # query:torch.Size([1, 2500, 256])
+                    **kwargs) # 相机坐标系下生成的bev_mask，主要用于判断点是否位于相机前方以及相机成像平面内 torch.Size([6, 1, 2500, 4]) # query:torch.Size([1, 2500, 256])
                 attn_index += 1
                 identity = query
 
@@ -408,7 +408,7 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
                     query, identity if self.pre_norm else None)
                 ffn_index += 1
 
-        return query
+        return query # torch.Size([1, 2500, 256])
 
 
 

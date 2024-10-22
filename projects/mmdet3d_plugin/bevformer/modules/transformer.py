@@ -109,7 +109,7 @@ class PerceptionTransformer(BaseModule):
             bev_w, # 50
             grid_length=[0.512, 0.512], # (2.048,2.048)
             bev_pos=None, # bev_mask(全零初始化)经过LearnedPositionalEncoding之后，torch.Size([1, 256, 50, 50])
-            prev_bev=None,
+            prev_bev=None, # 第一帧时为None/ 之后为前一帧的bev特征 torch.Size([1, 2500, 256])
             **kwargs):
         """
         obtain bev features.
@@ -138,22 +138,22 @@ class PerceptionTransformer(BaseModule):
         shift_y = shift_y * self.use_shift
         shift_x = shift_x * self.use_shift
         shift = bev_queries.new_tensor(
-            [shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy  # 生成和bev_queries数据类型一致的tensor，tensor([[0., 0.]])
+            [shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy  # 生成和bev_queries数据类型一致的tensor，第一帧时为自身位置，值为tensor([[0., 0.]])，之后车辆移动，即与上一时刻相对偏移量
 
         if prev_bev is not None: # 有前一帧bev时
             if prev_bev.shape[1] == bev_h * bev_w:
-                prev_bev = prev_bev.permute(1, 0, 2)
+                prev_bev = prev_bev.permute(1, 0, 2) # torch.Size([1, 2500, 256])->torch.Size([2500, 1, 256])
             if self.rotate_prev_bev:
                 for i in range(bs):
                     # num_prev_bev = prev_bev.size(1)
                     rotation_angle = kwargs['img_metas'][i]['can_bus'][-1]
                     tmp_prev_bev = prev_bev[:, i].reshape(
-                        bev_h, bev_w, -1).permute(2, 0, 1)
+                        bev_h, bev_w, -1).permute(2, 0, 1) # prev_bev[:, i]:torch.Size([2500, 256]) tmp_prev_bev:torch.Size([256, 50, 50])
                     tmp_prev_bev = rotate(tmp_prev_bev, rotation_angle,
-                                          center=self.rotate_center)
+                                          center=self.rotate_center) # F_t.rotate(img, matrix=matrix, interpolation=interpolation.value, expand=expand, fill=fill)
                     tmp_prev_bev = tmp_prev_bev.permute(1, 2, 0).reshape(
-                        bev_h * bev_w, 1, -1)
-                    prev_bev[:, i] = tmp_prev_bev[:, 0]
+                        bev_h * bev_w, 1, -1) # torch.Size([256, 50, 50])->torch.Size([2500, 1, 256])
+                    prev_bev[:, i] = tmp_prev_bev[:, 0] # 根据车辆转角，转动bev特征平面
 
         # add can bus signals
         can_bus = bev_queries.new_tensor(
@@ -192,25 +192,25 @@ class PerceptionTransformer(BaseModule):
             bev_pos=bev_pos, # torch.Size([2500, 1, 256]) bev_mask经过LearnedPositionalEncoding之后，torch.Size([1, 256, 50, 50])
             spatial_shapes=spatial_shapes, # 多层情况为每一层特征图的h和w
             level_start_index=level_start_index, # 多层情况为每一层的特征图展平后的索引
-            prev_bev=prev_bev,
-            shift=shift,
+            prev_bev=prev_bev, # 第一帧为None/ 之后会根据自车朝向，转动bev特征，torch.Size([2500, 1, 256])
+            shift=shift, # torch.Size([1, 2]) 与上一时刻相对偏移量
             **kwargs
         )
 
-        return bev_embed
+        return bev_embed # torch.Size([1, 2500, 256])
 
     @auto_fp16(apply_to=('mlvl_feats', 'bev_queries', 'object_query_embed', 'prev_bev', 'bev_pos'))
     def forward(self,
-                mlvl_feats,
-                bev_queries,
-                object_query_embed,
+                mlvl_feats, # 六个相机的图像特征torch.Size([1, 6, 256, 15, 25])
+                bev_queries, # 由nn.Embedding(2500, 256)生成
+                object_query_embed, # 由nn.Embedding(900, 512)生成
                 bev_h,
                 bev_w,
-                grid_length=[0.512, 0.512],
-                bev_pos=None,
+                grid_length=[0.512, 0.512], # (2.048, 2.048)
+                bev_pos=None, # bev_mask(全零初始化)经过LearnedPositionalEncoding之后，torch.Size([1, 256, 50, 50])
                 reg_branches=None,
                 cls_branches=None,
-                prev_bev=None,
+                prev_bev=None, # 由encoder生成的前N帧的bev特征 torch.Size([1, 2500, 256])
                 **kwargs):
         """Forward function for `Detr3DTransformer`.
         Args:
@@ -250,37 +250,37 @@ class PerceptionTransformer(BaseModule):
         """
 
         bev_embed = self.get_bev_features(
-            mlvl_feats,
-            bev_queries,
+            mlvl_feats, # # 六个相机的图像特征torch.Size([1, 6, 256, 15, 25])
+            bev_queries, # 由nn.Embedding(2500, 256)生成
             bev_h,
             bev_w,
-            grid_length=grid_length,
-            bev_pos=bev_pos,
-            prev_bev=prev_bev,
-            **kwargs)  # bev_embed shape: bs, bev_h*bev_w, embed_dims
+            grid_length=grid_length, # (2.048, 2.048)
+            bev_pos=bev_pos, # bev_mask(全零初始化)经过LearnedPositionalEncoding之后，torch.Size([1, 256, 50, 50])
+            prev_bev=prev_bev, # 由encoder生成的前N帧的bev特征 torch.Size([1, 2500, 256])
+            **kwargs)  # bev_embed shape: bs, bev_h*bev_w, embed_dims :torch.Size([1, 2500, 256])
 
         bs = mlvl_feats[0].size(0)
         query_pos, query = torch.split(
-            object_query_embed, self.embed_dims, dim=1)
-        query_pos = query_pos.unsqueeze(0).expand(bs, -1, -1)
-        query = query.unsqueeze(0).expand(bs, -1, -1)
-        reference_points = self.reference_points(query_pos)
-        reference_points = reference_points.sigmoid()
+            object_query_embed, self.embed_dims, dim=1) # query_pos:torch.Size([900, 256]) query:torch.Size([900, 256]) 由nn.Embedding(900, 512)生成并拆分为两组
+        query_pos = query_pos.unsqueeze(0).expand(bs, -1, -1) # torch.Size([900, 256])->torch.Size([1, 900, 256])
+        query = query.unsqueeze(0).expand(bs, -1, -1) # torch.Size([900, 256])->torch.Size([1, 900, 256])
+        reference_points = self.reference_points(query_pos) # self.reference_points:Linear(in_features=256, out_features=3, bias=True) torch.Size([1, 900, 256])->torch.Size([1, 900, 3])
+        reference_points = reference_points.sigmoid() # torch.Size([1, 900, 3])
         init_reference_out = reference_points
 
-        query = query.permute(1, 0, 2)
-        query_pos = query_pos.permute(1, 0, 2)
-        bev_embed = bev_embed.permute(1, 0, 2)
+        query = query.permute(1, 0, 2) # torch.Size([1, 900, 256])->torch.Size([900, 1, 256])
+        query_pos = query_pos.permute(1, 0, 2) # torch.Size([1, 900, 256])->torch.Size([900, 1, 256])
+        bev_embed = bev_embed.permute(1, 0, 2) # torch.Size([1, 2500, 256])->torch.Size([2500, 1, 256])
 
         inter_states, inter_references = self.decoder(
-            query=query,
+            query=query, # 由nn.Embedding(900, 512)初始化生成并拆分为两组取其中一组 torch.Size([900, 1, 256])
             key=None,
-            value=bev_embed,
-            query_pos=query_pos,
-            reference_points=reference_points,
-            reg_branches=reg_branches,
-            cls_branches=cls_branches,
-            spatial_shapes=torch.tensor([[bev_h, bev_w]], device=query.device),
+            value=bev_embed, # 由encoder生成的bev特征 torch.Size([2500, 1, 256])
+            query_pos=query_pos, # 由nn.Embedding(900, 512)初始化生成并拆分为两组取其中另一组 torch.Size([900, 1, 256])
+            reference_points=reference_points, # query_pos经过线性层得到 torch.Size([1, 900, 3])
+            reg_branches=reg_branches, # 6 x [Linear(in_features=256, out_features=256, bias=True) Linear(in_features=256, out_features=256, bias=True) Linear(in_features=256, out_features=10, bias=True)]
+            cls_branches=cls_branches, # None
+            spatial_shapes=torch.tensor([[bev_h, bev_w]], device=query.device), # torch.tensor([[50, 50]]
             level_start_index=torch.tensor([0], device=query.device),
             **kwargs)
 

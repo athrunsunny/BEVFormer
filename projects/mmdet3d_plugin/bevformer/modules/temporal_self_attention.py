@@ -194,7 +194,7 @@ class TemporalSelfAttention(BaseModule):
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
         assert self.num_bev_queue == 2
 
-        query = torch.cat([value[:bs], query], -1) # value[:bs]为前一帧bev特征 torch.Size([1, 2500, 512])
+        query = torch.cat([value[:bs], query], -1) # value[:bs]为前一帧bev特征（根据自车转向，前一帧bev特征做了旋转） torch.Size([1, 2500, 512])
         value = self.value_proj(value) # value_proj:Linear(in_features=256, out_features=256, bias=True) torch.Size([2, 2500, 256])
 
         if key_padding_mask is not None:

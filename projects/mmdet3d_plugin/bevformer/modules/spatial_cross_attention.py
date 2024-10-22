@@ -145,9 +145,9 @@ class SpatialCrossAttention(BaseModule):
 
         # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
         queries_rebatch = query.new_zeros(
-            [bs, self.num_cams, max_len, self.embed_dims]) # 根据bev_mask上求和之后找到不为0的索引个数最大值生成（全0） torch.Size([1, 6, 604, 256])
+            [bs, self.num_cams, max_len, self.embed_dims]) # 根据bev_mask上求和之后找到不为0的索引个数最大值生成max_len（值全0） torch.Size([1, 6, 604, 256])
         reference_points_rebatch = reference_points_cam.new_zeros(
-            [bs, self.num_cams, max_len, D, 2]) # 根据bev_mask上求和之后找到不为0的索引个数最大值生成（全0） torch.Size([1, 6, 604, 4, 2])
+            [bs, self.num_cams, max_len, D, 2]) # 根据bev_mask上求和之后找到不为0的索引个数最大值生成max_len（值全0） torch.Size([1, 6, 604, 4, 2])
         
         for j in range(bs):
             for i, reference_points_per_img in enumerate(reference_points_cam):   
@@ -158,9 +158,9 @@ class SpatialCrossAttention(BaseModule):
         num_cams, l, bs, embed_dims = key.shape # torch.Size([6, 375, 1, 256])
 
         key = key.permute(2, 0, 1, 3).reshape(
-            bs * self.num_cams, l, self.embed_dims) #torch.Size([6, 375, 1, 256])-> torch.Size([6, 375, 256])
+            bs * self.num_cams, l, self.embed_dims) #六个相机的图像特征 torch.Size([6, 375, 1, 256])-> torch.Size([6, 375, 256])
         value = value.permute(2, 0, 1, 3).reshape(
-            bs * self.num_cams, l, self.embed_dims)#torch.Size([6, 375, 1, 256])-> torch.Size([6, 375, 256])
+            bs * self.num_cams, l, self.embed_dims)#六个相机的图像特征 torch.Size([6, 375, 1, 256])-> torch.Size([6, 375, 256])
 
         queries = self.deformable_attention(query=queries_rebatch.view(bs*self.num_cams, max_len, self.embed_dims), key=key, value=value,
                                             reference_points=reference_points_rebatch.view(bs*self.num_cams, max_len, D, 2), spatial_shapes=spatial_shapes,
@@ -168,12 +168,12 @@ class SpatialCrossAttention(BaseModule):
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
                 # 不同相机间的特征向量直接相加
-                slots[j, index_query_per_img] += queries[j, i, :len(index_query_per_img)] # 将多视角图像特征投影到同一空间上
+                slots[j, index_query_per_img] += queries[j, i, :len(index_query_per_img)] # 将多视角图像特征投影到同一空间上 slots:torch.Size([1, 2500, 256])
 
-        count = bev_mask.sum(-1) > 0
-        count = count.permute(1, 2, 0).sum(-1)
+        count = bev_mask.sum(-1) > 0 # bev_mask:torch.Size([6, 1, 2500, 4]) count:torch.Size([6, 1, 2500])
+        count = count.permute(1, 2, 0).sum(-1) # torch.Size([6, 1, 2500])->torch.Size([1, 2500])
         count = torch.clamp(count, min=1.0)
-        slots = slots / count[..., None]
+        slots = slots / count[..., None] #slots:torch.Size([1, 2500, 256])
         slots = self.output_proj(slots) # output_projLinear:(in_features=256, out_features=256, bias=True) torch.Size([1, 2500, 256])
 
         return self.dropout(slots) + inp_residual
@@ -275,13 +275,13 @@ class MSDeformableAttention3D(BaseModule):
         self._is_init = True
 
     def forward(self,
-                query,
-                key=None,
-                value=None,
+                query, # queries_rebatch对query（bev特征）进行采样后的结果 torch.Size([6, 604, 256])
+                key=None, # 六个相机的图像特征torch.Size([6, 375, 256]) 增加了相机embed和特征层embed
+                value=None, # 六个相机的图像特征torch.Size([6, 375, 256]) 增加了相机embed和特征层embed
                 identity=None,
                 query_pos=None,
                 key_padding_mask=None,
-                reference_points=None,
+                reference_points=None, # 相机坐标系下的参考点进行采样后的结果 torch.Size([6, 604, 4, 2])
                 spatial_shapes=None,
                 level_start_index=None,
                 **kwargs):

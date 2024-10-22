@@ -91,45 +91,50 @@ class BEVFormerEncoder(TransformerLayerSequence):
         allow_tf32 = torch.backends.cuda.matmul.allow_tf32
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
-
+        # lidar2img相当于相机外参
         lidar2img = []
         for img_meta in img_metas:
             lidar2img.append(img_meta['lidar2img'])  # mg_meta['lidar2img']:[[4,4]*6]
         lidar2img = np.asarray(lidar2img) # (1, 6, 4, 4)
         lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
         reference_points = reference_points.clone()
-
+        # reference_points = ref_3d # normalize 0~1 # torch.Size([1, 4, 50*50, 3])
+        # pc_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+        # reference_points映射到自车坐标系下, 尺度被缩放为真实尺度
         reference_points[..., 0:1] = reference_points[..., 0:1] * \
             (pc_range[3] - pc_range[0]) + pc_range[0]
         reference_points[..., 1:2] = reference_points[..., 1:2] * \
             (pc_range[4] - pc_range[1]) + pc_range[1]
         reference_points[..., 2:3] = reference_points[..., 2:3] * \
             (pc_range[5] - pc_range[2]) + pc_range[2]
-
+        # bs, num_points_in_pillar, bev_h * bev_w, xyz1
         reference_points = torch.cat(
             (reference_points, torch.ones_like(reference_points[..., :1])), -1) # torch.Size([1, 4, 2500, 4]) 齐次
-
+        
         reference_points = reference_points.permute(1, 0, 2, 3) # torch.Size([1, 4, 2500, 4])->torch.Size([4, 1, 2500, 4])
         D, B, num_query = reference_points.size()[:3]
         num_cam = lidar2img.size(1) # 6
-
+        # num_points_in_pillar, bs, num_cam, bev_h * bev_w, xyz1, None
         reference_points = reference_points.view(
             D, B, 1, num_query, 4).repeat(1, 1, num_cam, 1, 1).unsqueeze(-1)  #torch.Size([4, 1, 2500, 4])->torch.Size([4, 1, 6, 2500, 4, 1])
-
+        # num_points_in_pillar, bs, num_cam, bev_h * bev_w, 4, 4
         lidar2img = lidar2img.view(
             1, B, num_cam, 1, 4, 4).repeat(D, 1, 1, num_query, 1, 1) #  (1, 6, 4, 4)->torch.Size([4, 1, 6, 2500, 4, 4])
         # Z*(u,v,1)^T = K*W2C*(X,Y,Z,1)^T
+        # num_points_in_pillar, bs, num_cam, bev_h * bev_w, xys1
         reference_points_cam = torch.matmul(lidar2img.to(torch.float32),
                                             reference_points.to(torch.float32)).squeeze(-1) # 将3d点转换坐标系
         eps = 1e-5
 
         bev_mask = (reference_points_cam[..., 2:3] > eps) # 取位于相机前方的点 torch.Size([4, 1, 6, 2500, 1])
+        # 齐次坐标下除以比例系数得到图像平面的坐标真值
+        # num_points_in_pillar, bs, num_cam, bev_h * bev_w, uv
         reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
             reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps)  # 取二维点并归一化
 
         reference_points_cam[..., 0] /= img_metas[0]['img_shape'][0][1] # 800
         reference_points_cam[..., 1] /= img_metas[0]['img_shape'][0][0] # 480
-
+        #从相机感受野的角度再删选一次
         bev_mask = (bev_mask & (reference_points_cam[..., 1:2] > 0.0)
                     & (reference_points_cam[..., 1:2] < 1.0)
                     & (reference_points_cam[..., 0:1] < 1.0)

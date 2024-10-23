@@ -165,7 +165,7 @@ class BEVFormerEncoder(TransformerLayerSequence):
                 spatial_shapes=None,
                 level_start_index=None,
                 valid_ratios=None,
-                prev_bev=None, # 第一帧为None/ 之后会根据自车朝向，转动bev特征，torch.Size([2500, 1, 256])
+                prev_bev=None, # 第一帧为None/ 之后会根据当前帧自车朝向，转动bev特征，torch.Size([2500, 1, 256])
                 shift=0., # torch.Size([1, 2]) 与上一时刻相对偏移量
                 **kwargs):
         """Forward function for `TransformerDecoder`.
@@ -231,7 +231,7 @@ class BEVFormerEncoder(TransformerLayerSequence):
                 level_start_index=level_start_index,
                 reference_points_cam=reference_points_cam, # 相机坐标系下的参考点
                 bev_mask=bev_mask, # 相机坐标系下生成的bev_mask，主要用于判断点是否位于相机前方以及相机成像平面内
-                prev_bev=prev_bev, # 第一帧为None/ 之后会根据自车朝向，转动bev特征，并堆叠当前帧的bev特征 torch.Size([2, 2500, 256])
+                prev_bev=prev_bev, # 第一帧为None/ 之后会根据当前帧自车朝向，转动bev特征，并堆叠当前帧的bev特征 torch.Size([2, 2500, 256])
                 **kwargs)
 
             bev_query = output

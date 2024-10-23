@@ -154,20 +154,23 @@ class BEVFormerHead(DETRHead):
             )
         else:
             outputs = self.transformer(
-                mlvl_feats,
-                bev_queries,
-                object_query_embeds,
+                mlvl_feats, # 六个相机的图像特征torch.Size([1, 6, 256, 15, 25])
+                bev_queries, # 由nn.Embedding(2500, 256)生成 torch.Size([2500, 256])
+                object_query_embeds, # 由nn.Embedding(900, 512)生成 torch.Size([900, 512])
                 self.bev_h,
                 self.bev_w,
                 grid_length=(self.real_h / self.bev_h,
                              self.real_w / self.bev_w),
-                bev_pos=bev_pos,
+                bev_pos=bev_pos, # bev_mask(全零初始化)经过LearnedPositionalEncoding之后，torch.Size([1, 256, 50, 50])
                 reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
                 cls_branches=self.cls_branches if self.as_two_stage else None,
                 img_metas=img_metas,
-                prev_bev=prev_bev
+                prev_bev=prev_bev # 前N帧的bev特征 torch.Size([1, 2500, 256]) # 由encoder生成的前N帧的bev特征
         )
-
+        # bev_embed bev特征:torch.Size([2500, 1, 256])
+        # inter_states decoder每一层的输出:torch.Size([6, 900, 1, 256])
+        # init_reference_out 最初的参考点:torch.Size([1, 900, 3])
+        # inter_references=init_reference_out decoder最后一层输出的参考点:torch.Size([6, 1, 900, 3])
         bev_embed, hs, init_reference, inter_references = outputs
         hs = hs.permute(0, 2, 1, 3)
         outputs_classes = []
@@ -203,9 +206,9 @@ class BEVFormerHead(DETRHead):
         outputs_coords = torch.stack(outputs_coords)
 
         outs = {
-            'bev_embed': bev_embed,
-            'all_cls_scores': outputs_classes,
-            'all_bbox_preds': outputs_coords,
+            'bev_embed': bev_embed, # torch.Size([2500, 1, 256])
+            'all_cls_scores': outputs_classes, # torch.Size([6, 1, 900, 10])
+            'all_bbox_preds': outputs_coords, # torch.Size([6, 1, 900, 10])
             'enc_cls_scores': None,
             'enc_bbox_preds': None,
         }
@@ -429,7 +432,7 @@ class BEVFormerHead(DETRHead):
         assert gt_bboxes_ignore is None, \
             f'{self.__class__.__name__} only supports ' \
             f'for gt_bboxes_ignore setting to None.'
-
+        # 开始计算loss
         all_cls_scores = preds_dicts['all_cls_scores']
         all_bbox_preds = preds_dicts['all_bbox_preds']
         enc_cls_scores = preds_dicts['enc_cls_scores']

@@ -131,26 +131,26 @@ class BEVFormerHead(DETRHead):
                 head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
                 Shape [nb_dec, bs, num_query, 9].
         """
-        bs, num_cam, _, _, _ = mlvl_feats[0].shape
+        bs, num_cam, _, _, _ = mlvl_feats[0].shape # torch.Size([1, 6, 256, 15, 25])
         dtype = mlvl_feats[0].dtype
-        object_query_embeds = self.query_embedding.weight.to(dtype)
-        bev_queries = self.bev_embedding.weight.to(dtype)
+        object_query_embeds = self.query_embedding.weight.to(dtype) # nn.Embedding(900, 512)
+        bev_queries = self.bev_embedding.weight.to(dtype) # nn.Embedding(2500, 256)
 
         bev_mask = torch.zeros((bs, self.bev_h, self.bev_w),
-                               device=bev_queries.device).to(dtype)
-        bev_pos = self.positional_encoding(bev_mask).to(dtype)
+                               device=bev_queries.device).to(dtype) # torch.Size([1, 50, 50])
+        bev_pos = self.positional_encoding(bev_mask).to(dtype) # torch.Size([1, 256, 50, 50])
 
         if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround
             return self.transformer.get_bev_features(
-                mlvl_feats,
-                bev_queries,
-                self.bev_h,
-                self.bev_w,
+                mlvl_feats, # 六个相机的图像特征torch.Size([1, 6, 256, 15, 25])
+                bev_queries, # 由nn.Embedding(2500, 256)生成
+                self.bev_h, # 50
+                self.bev_w, # 50
                 grid_length=(self.real_h / self.bev_h,
-                             self.real_w / self.bev_w),
-                bev_pos=bev_pos,
+                             self.real_w / self.bev_w), # (2.048,2.048)
+                bev_pos=bev_pos, # bev_mask(全零初始化)经过LearnedPositionalEncoding之后，torch.Size([1, 256, 50, 50])
                 img_metas=img_metas,
-                prev_bev=prev_bev,
+                prev_bev=prev_bev, # 第一帧时为None/ 之后为前一帧的bev特征 torch.Size([1, 2500, 256])
             )
         else:
             outputs = self.transformer(
@@ -245,7 +245,7 @@ class BEVFormerHead(DETRHead):
         num_bboxes = bbox_pred.size(0)
         # assigner and sampler
         gt_c = gt_bboxes.shape[-1]
-
+        gt_labels = gt_labels.type(torch.long)
         assign_result = self.assigner.assign(bbox_pred, cls_score, gt_bboxes,
                                              gt_labels, gt_bboxes_ignore)
 

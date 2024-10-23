@@ -125,7 +125,7 @@ class DetectionTransformerDecoder(TransformerLayerSequence):
         if self.return_intermediate:
             return torch.stack(intermediate), torch.stack(
                 intermediate_reference_points)
-
+        # reference_points decoder最后一层输出的参考点:torch.Size([1, 900, 3])
         return output, reference_points
 
 

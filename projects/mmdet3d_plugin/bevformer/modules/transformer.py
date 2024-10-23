@@ -251,7 +251,7 @@ class PerceptionTransformer(BaseModule):
 
         bev_embed = self.get_bev_features(
             mlvl_feats, # # 六个相机的图像特征torch.Size([1, 6, 256, 15, 25])
-            bev_queries, # 由nn.Embedding(2500, 256)生成
+            bev_queries, # 由nn.Embedding(2500, 256)生成 torch.Size([2500, 256])
             bev_h,
             bev_w,
             grid_length=grid_length, # (2.048, 2.048)
@@ -285,5 +285,8 @@ class PerceptionTransformer(BaseModule):
             **kwargs)
 
         inter_references_out = inter_references
-
+        # bev_embed bev特征:torch.Size([2500, 1, 256])
+        # inter_states decoder每一层的输出:torch.Size([6, 900, 1, 256])
+        # init_reference_out 最初的参考点:torch.Size([1, 900, 3])
+        # inter_references=init_reference_out decoder最后一层输出的参考点:torch.Size([6, 1, 900, 3])
         return bev_embed, inter_states, init_reference_out, inter_references_out
